@@ -221,7 +221,6 @@ class HTTPServer < TCPServer
                     route = self.get_route(request['path'])
 
                     if route
-                        pp route
                         class_name = route['class']
                         method_name = route['method']
 
@@ -258,8 +257,19 @@ class HTTPServer < TCPServer
 end
 
 class RPC
-#    def initialize(*args)
-#    end
+
+    def json_err(code, message, data)
+        res = {
+            'jsonrpc' => '2.0',
+            'error' => {
+                'code' => code,
+                'message' => message,
+                'data' => data
+            }
+        }
+#        self.log("JSON Error: #{message}; #{data}" )
+        return res.to_json
+    end
 
     def run(json_req)
 
@@ -268,34 +278,38 @@ class RPC
         begin
             req = JSON.parse(json_req);
         rescue => e
-            self.log("Error: " + e.to_s)
-            res = {
-                'jsonrpc' => '2.0',
-                'error' => {
-                    'code' => -32700,
-                    'message' => 'Parse error',
-                    'data' => e.message
-                }
-            }
-            return res.to_json
+            return self.json_err(-32700, 'Parse error', e.message)
         end
 
-        req['id'] ||= 1
+        id = req['id']
 
-        out = "Hi!"
+        method_name = req['method']
+        params = req['params']
 
-        self.json_res(out, req['id'])
+        if self.class.instance_methods.include?(:"#{method_name}")
+            begin
+                res = self.send(:"#{method_name}", params)
+
+                return self.json_res(res, id)
+            rescue => e
+                return self.json_err(-32600, 'Invalid Request', e.message)
+            end
+        else
+            return self.json_err(-32601, 'Method not found', '')
+        end
     end
 
     def json_res(result, id)
-        res = {
+        {
             'jsonrpc' => '2.0',
             'result' => result,
             'id' => id
-        }
-        res.to_json
+        }.to_json
     end
 
+    def hello(name)
+        'Hi, '+ name.to_s + '!'
+    end
 end
 
 require 'optparse'
