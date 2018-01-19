@@ -6,6 +6,7 @@ require 'time'
 require 'base64'
 require 'json'
 require 'pp'
+require 'etc'
 
 class HTTPServer < TCPServer
 
@@ -72,7 +73,6 @@ class HTTPServer < TCPServer
         pid = Process.pid
         begin
             f = File.open(@config['pidfile'], 'w+')
-            self.log("Wrote pid " + pid.to_s)
             f.write(pid)
             f.close
         rescue => e
@@ -89,31 +89,6 @@ class HTTPServer < TCPServer
         f = File.open(@config['logfile'], 'a+')
         f.write(rec)
         f.close
-    end
-
-    def rpc(json_req)
-        req = Hash.new
-        begin
-            req = JSON.parse(json_req);
-        rescue Exception => e
-            self.log("Error: " + e.to_s)
-            res = {
-                'jsonrpc' => '2.0',
-                'error' => {
-                    'code' => -32700,
-                    'message' => 'Parse error',
-                    'data' => e.message
-                }
-            }
-            return res.to_json
-        end
-        out = "Hi!"
-        res = {
-            'jsonrpc' => '2.0',
-            'result' => out,
-            'id' => req['id']
-        }
-        res.to_json
     end
 
     def message_errlength
@@ -142,6 +117,31 @@ class HTTPServer < TCPServer
         message
     end
 
+    def message_errpath
+        res = "Not Found"
+        message = String.new
+        message += "HTTP/1.1 404 Not Found\r\n"
+        message += "Date: " + Time.now.httpdate + "\r\n"
+        message += "Server: HTTPServer 0.01\r\n"
+        message += "Content-Type: text/plain\r\n"
+        message += "Content-Length: " + res.size.to_s + "\r\n"
+        message += "\r\n"
+        message += res
+        message
+    end
+
+    def message_base(res)
+        message = String.new
+        message += "HTTP/1.1 200 OK\r\n"
+        message += "Date: " + Time.now.httpdate + "\r\n"
+        message += "Server: HTTPServer 0.01\r\n"
+        message += "Content-Type: application/json\r\n"
+        message += "Content-Length: " + res.size.to_s + "\r\n"
+        message += "\r\n"
+        message += res
+        message
+    end
+
     def run
         self.log("Start application")
 
@@ -164,7 +164,7 @@ class HTTPServer < TCPServer
 
                     until (line = session.gets) && (line.inspect.eql?('"\r\n"'))
                         line.strip!
-                        if line.match(/^POST/)
+                        if line.match(/^POST/) or line.match(/^GET/)
                             (method, uri, proto) = line.split(/ /)
                             request['method'] = method
                             request['uri'] = uri
@@ -187,17 +187,6 @@ class HTTPServer < TCPServer
 
                     self.log(message)
 
-                    unless request['content-length']
-                        session.puts(self.errlength)
-                        session.close
-                        next
-                    end
-
-                    if request['method'].match(/POST/) && request['content-length']
-                        size = request['content-length'].to_i
-                        body = session.read(size)
-                    end
-
                     aut = false
                     if request['authorization']
                         (basic, pair) = request['authorization'].split(/ /)
@@ -205,22 +194,50 @@ class HTTPServer < TCPServer
                         a = self.auth(login, password)
                     end
 
-                    unless a == true
-                        session.puts self.errauth
+                    if a == false
+                        session.puts self.message_errauth
                         session.close
                         next
                     end
 
-                    res = self.rpc(body)
+                    if request['method'].match(/GET/)
+                        session.puts self.message_errpath
+                        session.close
+                        next
+                    end
 
-                    session.puts "HTTP/1.1 200 OK\r\n"
-                    session.puts "Date: " + Time.now.httpdate + "\r\n"
-                    session.puts "Server: HTTPServer 0.01\r\n"
-                    session.puts "Content-Type: application/json\r\n"
-                    session.puts "Content-Length: " + res.size.to_s + "\r\n"
-                    session.puts "\r\n"
-                    session.puts res
+                    if request['method'].match(/POST/) 
+                        if request['content-length']
+                            size = request['content-length'].to_i
+                            body = session.read(size)
+                        else
+                            session.puts self.message_errlength
+                            session.close
+                            next
+                        end
+                    end
 
+                    res = String.new
+                    route = self.get_route(request['path'])
+
+                    if route
+                        pp route
+                        class_name = route['class']
+                        method_name = route['method']
+
+                        if Object.const_defined?(class_name)
+
+                            _class = Kernel.const_get(class_name)
+                            _instance = _class.send('new')
+
+                            if _class.instance_methods.include?(:"#{method_name}")
+                                res = _instance.send(:"#{method_name}", body)
+                            end
+                        end
+                        session.puts self.message_base(res)
+                    else
+                        session.puts self.message_errpath
+                    end
                     session.close
                 end
             rescue => e
@@ -240,6 +257,47 @@ class HTTPServer < TCPServer
     end
 end
 
+class RPC
+#    def initialize(*args)
+#    end
+
+    def run(json_req)
+
+        req = Hash.new
+
+        begin
+            req = JSON.parse(json_req);
+        rescue => e
+            self.log("Error: " + e.to_s)
+            res = {
+                'jsonrpc' => '2.0',
+                'error' => {
+                    'code' => -32700,
+                    'message' => 'Parse error',
+                    'data' => e.message
+                }
+            }
+            return res.to_json
+        end
+
+        req['id'] ||= 1
+
+        out = "Hi!"
+
+        self.json_res(out, req['id'])
+    end
+
+    def json_res(result, id)
+        res = {
+            'jsonrpc' => '2.0',
+            'result' => result,
+            'id' => id
+        }
+        res.to_json
+    end
+
+end
+
 require 'optparse'
 
 params = ARGV.getopts("hf")
@@ -255,6 +313,7 @@ end
 if params['f'] == true
     nofork = true
 end
+
 
 server = HTTPServer.new('0.0.0.0', 4431)
 
@@ -273,11 +332,12 @@ Signal.trap('TERM') do
     server.shutdown('Handle TERM signal')
 end
 
-#server.set_route('/rpc', 'RPC', 'run')
+server.set_route('/rpc', 'RPC', 'run')
+
 unless nofork == true
     server.fork
 end
 server.writepid
 server.run
-
+server.shutdown('Generic exit')
 #EOF
