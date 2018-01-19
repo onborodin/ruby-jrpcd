@@ -1,0 +1,13 @@
+[Unit]
+Description=jrpcd
+
+[Service]
+Type=forking
+PIDFile=@app_rundir@/jrpcd.pid
+ExecStart=@prefix@/sbin/jrpcd
+ExecReload=/bin/kill -HUP $MAINPID
+ExecStartPre=/bin/mkdir -p @app_rundir@
+
+[Install]
+WantedBy=multi-user.target
+

@@ -1,0 +1,24 @@
+#!/bin/sh
+#
+# $Id$
+#
+# PROVIDE: jrpcd
+# REQUIRE: LOGIN
+
+. /etc/rc.subr
+
+name="jrpcd"
+rcvar="jrpcd_enable"
+
+pidfile="@app_rundir@"/jrpcd.pid
+command="@prefix@/sbin/${name}"
+command_args=""
+procname="@prefix@/sbin/${name}"
+command_interpreter="@ruby@"
+
+load_rc_config ${name}
+
+: ${jrpcd_enable:="NO"}
+
+run_rc_command "$1"
+#EOF
