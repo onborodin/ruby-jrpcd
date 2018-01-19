@@ -60,21 +60,26 @@ class HTTPServer < TCPServer
 
     def fork
         Dir.chdir('/')
-#        pid = Process.fork
-#        if pid
-#            exit
-#        end
+        pid = Process.fork
+        if pid
+            exit
+        end
+        $stdout.reopen("/dev/null", "w")
+        $stderr.reopen("/dev/null", "w")
     end
 
     def writepid
         pid = Process.pid
         begin
-            f = File.open(@config['pidfile'],'w')
+            f = File.open(@config['pidfile'], 'w+')
+            self.log("Wrote pid " + pid.to_s)
             f.write(pid)
             f.close
         rescue => e
             self.log("Error: " + e.to_s)
+            exit
         end
+        self.log("Wrote pid " + pid.to_s)
     end
 
     def log(message)
@@ -111,7 +116,7 @@ class HTTPServer < TCPServer
         res.to_json
     end
 
-    def errlength
+    def message_errlength
         res = "Length required"
         message = String.new
         message += "HTTP/1.1 411 Length required\r\n"
@@ -124,7 +129,7 @@ class HTTPServer < TCPServer
         message
     end
 
-    def errauth
+    def message_errauth
         res = "Unauthorized"
         message = String.new
         message += "HTTP/1.1 401 Unauthorized\r\n"
@@ -138,6 +143,7 @@ class HTTPServer < TCPServer
     end
 
     def run
+        self.log("Start application")
 
         begin 
             sslContext = OpenSSL::SSL::SSLContext.new
@@ -223,19 +229,55 @@ class HTTPServer < TCPServer
             end
         end
     end
+
+    def shutdown(reason)
+        self.log("Shutdown application: " + reason.to_s)
+        pidfile = self.get_config('pidfile')
+        if File.exist?(pidfile)
+            File.delete(self.get_config('pidfile'))
+        end
+        exit
+    end
+end
+
+require 'optparse'
+
+params = ARGV.getopts("hf")
+
+if params['h'] == true
+    puts "Usage:\n"
+    puts " -f No fork\n"
+    puts " -h Show this help\n"
+    puts "\n"
+    exit
+end
+
+if params['f'] == true
+    nofork = true
 end
 
 server = HTTPServer.new('0.0.0.0', 4431)
-server.set_config('pidfile', '/var/run/web.pid')
-server.set_config('logfile', '/var/log/web.log')
-server.set_config('pwfile', '/usr/local/etc/web/web.pw')
 
-server.set_config('crtfile', '/usr/local/etc/web/web.crt')
-server.set_config('keyfile', '/usr/local/etc/web/web.key')
+server.set_config('pidfile', '@app_rundir@/jrpcd.pid')
+server.set_config('logfile', '@app_logdir@/jrpcd.log')
+server.set_config('pwfile', '@app_confdir@/jrpcd.pw')
+server.set_config('crtfile', '@app_confdir@/jrpcd.crt')
+server.set_config('keyfile', '@app_confdir@/jrpcd.key')
+
+
+Signal.trap('INT') do
+    server.shutdown('Handle INT signal')
+end
+
+Signal.trap('TERM') do
+    server.shutdown('Handle TERM signal')
+end
 
 #server.set_route('/rpc', 'RPC', 'run')
-
-server.fork
+unless nofork == true
+    server.fork
+end
+server.writepid
 server.run
 
 #EOF
